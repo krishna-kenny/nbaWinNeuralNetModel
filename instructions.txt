@@ -1,0 +1,4 @@
+1] run nbaGet.py to get all the data
+2] run nbaPreprocessing.py to filter the required data to train the model
+3] run nbaModel.py to train the model
+4] 
