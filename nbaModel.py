@@ -48,46 +48,43 @@ def prepare_dataset(team_pairs, team_ids_dict, csv_file):
 
         if not matchups.empty:
             features = matchups.iloc[0]
+            input_data = []
 
-            # Head-to-head matchups
+            # 1. Win/Loss History for Past 16 Games (for Both Teams)
+            team1_history = features.get('Team1_Win_Loss_History', '[0]*16').strip('[]').split(',')
+            team2_history = features.get('Team2_Win_Loss_History', '[0]*16').strip('[]').split(',')
+            input_data.extend(map(float, team1_history))
+            input_data.extend(map(float, team2_history))
+
+            # 2. Head-to-Head Win/Loss History (Last 8 Games)
             head_to_head_df = df[
-                ((df['TEAM1_ID'] == team1_id) & (df['TEAM2_ABBR'].str.contains(team2_abbr))) |
-                ((df['TEAM2_ID'] == team2_id) & (df['TEAM1_ABBR'].str.contains(team1_abbr)))
-            ]
+                ((df['TEAM1_ID'] == team1_id) & (df['TEAM2_ID'] == team2_id)) |
+                ((df['TEAM1_ID'] == team2_id) & (df['TEAM2_ID'] == team1_id))
+            ].tail(8)
+            head_to_head_history = head_to_head_df['WL'].apply(lambda x: 1 if x == 'W' else 0).tolist()
+            head_to_head_history.extend([0] * (8 - len(head_to_head_history)))  # Pad if fewer than 8 games
+            input_data.extend(head_to_head_history)
 
-            if not head_to_head_df.empty:
-                team1_wins = head_to_head_df[(head_to_head_df['TEAM1_ID'] == team1_id) & (head_to_head_df['WL'] == 'W')].shape[0]
-                team1_losses = head_to_head_df[(head_to_head_df['TEAM1_ID'] == team1_id) & (head_to_head_df['WL'] == 'L')].shape[0]
+            # 3. Player Points per Minute (Last 16 Games for Each Team)
+            team1_ppm = features.get('Team1_PPM', '[0]*15').strip('[]').split(',')
+            team2_ppm = features.get('Team2_PPM', '[0]*15').strip('[]').split(',')
+            input_data.extend(map(float, team1_ppm))
+            input_data.extend(map(float, team2_ppm))
 
-                input_data = []
+            # 4. Average Team Stats (Last 16 Games)
+            team1_stats = features.get('Team1_Avg_Stats', '[0]*10').strip('[]').split(',')
+            team2_stats = features.get('Team2_Avg_Stats', '[0]*10').strip('[]').split(',')
+            input_data.extend(map(float, team1_stats))
+            input_data.extend(map(float, team2_stats))
 
-                # Handle Team Win History
-                if 'Team_Win_History' in features and isinstance(features['Team_Win_History'], str):
-                    input_data.extend(map(float, features['Team_Win_History'].strip('[]').split(',')))
-                else:
-                    input_data.extend([0.0])
+            # 5. Opponent Defensive Strength (Last 16 Games)
+            team1_opp_def = features.get('Team1_Opp_Defense', '[0]*5').strip('[]').split(',')
+            team2_opp_def = features.get('Team2_Opp_Defense', '[0]*5').strip('[]').split(',')
+            input_data.extend(map(float, team1_opp_def))
+            input_data.extend(map(float, team2_opp_def))
 
-                # Handle Team Loss History
-                if 'Team_Loss_History' in features and isinstance(features['Team_Loss_History'], str):
-                    input_data.extend(map(float, features['Team_Loss_History'].strip('[]').split(',')))
-                else:
-                    input_data.extend([0.0])
-
-                input_data.append(float(team1_wins))
-                input_data.append(float(team1_losses))
-
-                # Append numerical game stats
-                numerical_features = [
-                    'PTS_avg_16', 'AST_avg_16', 'REB_avg_16',
-                    'FGM_avg_16', 'FGA_avg_16', 'FG_PCT_avg_16',
-                    'FTM_avg_16', 'FTA_avg_16', 'OREB_avg_16', 'DREB_avg_16'
-                ]
-                for num_feature in numerical_features:
-                    if num_feature in features:
-                        input_data.append(float(features[num_feature]))
-
-                X.append(input_data)
-                y.append(1 if features['WL'] == 'W' else 0)
+            X.append(input_data)
+            y.append(1 if features['WL'] == 'W' else 0)
 
     print(f"Collected {len(X)} samples for training.")
     return np.array(X), np.array(y)
@@ -96,7 +93,8 @@ def prepare_dataset(team_pairs, team_ids_dict, csv_file):
 def train_model(X, y):
     """Train a neural network model on the given features and labels."""
     model = Sequential()
-    model.add(Dense(64, activation='relu', input_shape=(X.shape[1],)))
+    model.add(Dense(128, activation='relu', input_shape=(X.shape[1],)))
+    model.add(Dense(64, activation='relu'))
     model.add(Dense(32, activation='relu'))
     model.add(Dense(1, activation='sigmoid'))
 
