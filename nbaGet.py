@@ -80,7 +80,7 @@ def get_player_game_logs(seasons):
         print("No player game log data fetched.")
 
 # Define the list of seasons
-seasons = ['2020-21', '2021-22', '2022-23', '2023-24', '2024-25']
+seasons = ['2022-23', '2023-24', '2024-25']
 
 # Run functions to save data to CSV files
 get_team_info(seasons[-1])

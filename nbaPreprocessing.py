@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 # Function to preprocess team data
 def preprocess_team_data(input_file, output_file):
@@ -10,6 +11,7 @@ def preprocess_team_data(input_file, output_file):
     ]
     team_data = team_data.drop(columns=columns_to_drop)
     team_data.to_csv(output_file, index=False)
+    print(f"Team data preprocessed and saved. rows: {team_data.shape}")
 
 # Function to preprocess game logs
 def preprocess_game_logs(input_file, output_file):
@@ -34,8 +36,8 @@ def preprocess_game_logs(input_file, output_file):
     # Convert 'SEASON_YEAR' to integer format, using only the starting year
     game_logs_cleaned['SEASON_YEAR'] = game_logs_cleaned['SEASON_YEAR'].apply(lambda year: int(year[:4]))
 
-    # Save the processed data to a CSV file
     game_logs_cleaned.to_csv(output_file, index=False)
+    print(f"Game logs preprocessed and saved. rows: {game_logs_cleaned.shape}")
 
 # Function to preprocess player game logs
 def preprocess_player_game_logs(input_file, output_file):
@@ -45,12 +47,69 @@ def preprocess_player_game_logs(input_file, output_file):
     # Drop unnecessary columns
     columns_to_drop = [
         'PLAYER_NAME', 'NICKNAME', 'TEAM_NAME', 'TEAM_ABBREVIATION', 
-        'MATCHUP', 'GAME_DATE', 'GAME_ID'
+        'MATCHUP', 'GAME_ID', 'MIN_SEC'
     ]
     player_game_logs = player_game_logs.drop(columns=columns_to_drop)
+    player_game_logs['WL'] = player_game_logs['WL'].apply(lambda x: 1 if x == 'W' else 0)
+    player_game_logs['SEASON_YEAR'] = player_game_logs['SEASON_YEAR'].apply(lambda x: x[:4])
 
-    # Save the processed data to a new CSV file
     player_game_logs.to_csv(output_file, index=False)
+    print(f"Player game logs preprocessed and saved. rows: {player_game_logs.shape}")
+
+# Function to compute weighted averages
+def compute_weighted_avg(player_id, df):
+    """Compute weighted averages for a given player."""
+    player_rows = df[df["PLAYER_ID"] == player_id].copy()
+
+    # Convert GAME_DATE to a timestamp for weighting
+    player_rows["GAME_TIMESTAMP"] = pd.to_datetime(player_rows["GAME_DATE"]).apply(
+        lambda x: x.timestamp()
+    )
+    max_timestamp = player_rows["GAME_TIMESTAMP"].max()
+
+    # Calculate weights based on recency
+    player_rows["WEIGHTS"] = np.exp(
+        (player_rows["GAME_TIMESTAMP"] - max_timestamp) / 1e7
+    )
+    player_rows["WEIGHTS"] /= player_rows[  # Normalize weights to sum to 1
+        "WEIGHTS"
+    ].sum()
+
+    # Compute weighted average for all columns after WL
+    weighted_avg = (
+        player_rows.iloc[:, df.columns.get_loc("WL") + 1 :]  # Select columns after WL
+        .mul(player_rows["WEIGHTS"], axis=0)  # Multiply each column by weights
+        .sum()  # Sum the weighted values for each column
+    )
+    return weighted_avg
+
+# Function to create feature data
+def create_feature_data(input_csv, output_csv):
+    """Generate feature data where each player is represented by a single row."""
+    # Load the dataset
+    df = pd.read_csv(input_csv)
+    df.fillna(0, inplace=True)
+
+    # Ensure GAME_DATE is parsed correctly
+    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+
+    # Get unique players
+    unique_players = df["PLAYER_ID"].unique()
+
+    # Create a new dataframe to store the features
+    feature_data = []
+
+    for player_id in unique_players:
+        weighted_avg = compute_weighted_avg(player_id, df)
+        weighted_avg["PLAYER_ID"] = player_id  # Retain the player ID
+        feature_data.append(weighted_avg)
+
+    # Convert the list to a DataFrame
+    feature_df = pd.DataFrame(feature_data)
+
+    # Save to CSV
+    feature_df.to_csv(output_csv, index=False)
+    print(f"Feature data saved to {output_csv}. rows: {feature_df.shape}")
 
 # File paths for input and output data
 team_data_file = 'data/raw/nba_team_data.csv'
@@ -64,12 +123,6 @@ player_game_logs_output = 'data/processed/preprocessed_nba_player_game_logs.csv'
 
 # Run the preprocessing functions
 preprocess_team_data(team_data_file, team_data_output)
-print("Team data preprocessed and saved.")
-
 preprocess_game_logs(game_data_file, game_data_output)
-print("Game logs preprocessed and saved.")
-
 preprocess_player_game_logs(player_game_logs_file, player_game_logs_output)
-print("Player game logs preprocessed and saved.")
-
-
+create_feature_data(player_game_logs_output, "data/nba_player_features.csv")
