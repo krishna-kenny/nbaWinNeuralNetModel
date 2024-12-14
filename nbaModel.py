@@ -1,127 +1,72 @@
 import numpy as np
 import pandas as pd
-from nbaGet import fetch_team_ids
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense
 from sklearn.model_selection import train_test_split
 
 
-def collect_team_pairs(seasons):
-    """Collect all team pairs for the given seasons."""
-    team_ids_dict = fetch_team_ids()
-    team_pairs = []
+def prepare_dataset(game_logs_file, team_features_file):
+    """
+    Prepare dataset for training using team-specific features.
 
-    for season in seasons:
-        for team1_abbr, team1_id in team_ids_dict.items():
-            for team2_abbr, team2_id in team_ids_dict.items():
-                if team1_id != team2_id:
-                    team_pairs.append((team1_id, team2_id, season))
+    Args:
+        game_logs_file: CSV file containing game logs with TEAM1, TEAM2, and WL columns.
+        team_features_file: CSV file containing aggregated team features.
 
-    return team_pairs
+    Returns:
+        X: Feature matrix for training.
+        y: Target vector (win/loss).
+    """
+    # Load game logs and team features
+    game_logs = pd.read_csv(game_logs_file)
+    team_features = pd.read_csv(team_features_file)
 
-
-def prepare_dataset(team_pairs, team_ids_dict, csv_file):
-    """Prepare dataset for training based on team matchup pairs."""
-    df = pd.read_csv(csv_file)
-    df.fillna(0, inplace=True)
-
-    # Add columns for team IDs based on MATCHUP column
-    df["TEAM1_ABBR"] = df["MATCHUP"].apply(lambda x: x.split()[0])
-    df["TEAM2_ABBR"] = df["MATCHUP"].apply(lambda x: x.split()[2])
-
-    # Map abbreviations to IDs
-    df["TEAM1_ID"] = df["TEAM1_ABBR"].map(team_ids_dict)
-    df["TEAM2_ID"] = df["TEAM2_ABBR"].map(team_ids_dict)
-
-    # Convert GAME_DATE to timestamp for weight calculation
-    df["GAME_TIMESTAMP"] = pd.to_datetime(df["GAME_DATE"]).apply(
-        lambda x: x.timestamp()
+    # Merge team features for TEAM1 and TEAM2
+    game_logs = game_logs.merge(
+        team_features,
+        how="left",
+        left_on="TEAM1",
+        right_on="TEAM_ABBREVIATION",
+        suffixes=("", "_TEAM1"),
+    ).merge(
+        team_features,
+        how="left",
+        left_on="TEAM2",
+        right_on="TEAM_ABBREVIATION",
+        suffixes=("", "_TEAM2"),
     )
 
-    X = []
-    y = []
+    # Drop unnecessary columns
+    game_logs.drop(
+        columns=["TEAM_ABBREVIATION", "TEAM_ABBREVIATION_TEAM2"], inplace=True
+    )
 
-    for team1_id, team2_id, season in team_pairs:
-        team1_abbr = next(
-            (abbr for abbr, id in team_ids_dict.items() if id == team1_id), None
-        )
-        team2_abbr = next(
-            (abbr for abbr, id in team_ids_dict.items() if id == team2_id), None
-        )
+    # Save features
+    game_logs.to_csv("data/features.csv")
 
-        if team1_abbr is None or team2_abbr is None:
-            print(f"Could not find abbreviations for IDs {team1_id} and {team2_id}")
-            continue
+    # Handle missing values
+    game_logs.fillna(0, inplace=True)
 
-        matchups = df[
-            (df["TEAM1_ID"] == team1_id)
-            & (df["TEAM2_ID"] == team2_id)
-            & (df["SEASON_YEAR"] == season)
-        ]
+    # Extract features and target
+    team1_features = game_logs.filter(regex="_TEAM1$").to_numpy()
+    team2_features = game_logs.filter(regex="_TEAM2$").to_numpy()
+    X = np.hstack([team1_features, team2_features])
+    y = game_logs["WL"].astype(int).to_numpy()
 
-        if not matchups.empty:
-            features = matchups.iloc[0]
-            input_data = []
-
-            # Weighted averages for all columns after WL
-            team1_weighted_avg = compute_weighted_avg(team1_id, df)
-            team2_weighted_avg = compute_weighted_avg(team2_id, df)
-
-            input_data.extend(team1_weighted_avg)
-            input_data.extend(team2_weighted_avg)
-
-            # Original features
-            team1_history = (
-                features.get("Team1_Win_Loss_History", "[0]*16").strip("[]").split(",")
-            )
-            team2_history = (
-                features.get("Team2_Win_Loss_History", "[0]*16").strip("[]").split(",")
-            )
-            input_data.extend(map(float, team1_history))
-            input_data.extend(map(float, team2_history))
-
-            head_to_head_df = df[
-                ((df["TEAM1_ID"] == team1_id) & (df["TEAM2_ID"] == team2_id))
-                | ((df["TEAM1_ID"] == team2_id) & (df["TEAM2_ID"] == team1_id))
-            ].tail(8)
-            head_to_head_history = (
-                head_to_head_df["WL"].apply(lambda x: 1 if x == "W" else 0).tolist()
-            )
-            head_to_head_history.extend([0] * (8 - len(head_to_head_history)))
-            input_data.extend(head_to_head_history)
-
-            team1_ppm = features.get("Team1_PPM", "[0]*15").strip("[]").split(",")
-            team2_ppm = features.get("Team2_PPM", "[0]*15").strip("[]").split(",")
-            input_data.extend(map(float, team1_ppm))
-            input_data.extend(map(float, team2_ppm))
-
-            team1_stats = (
-                features.get("Team1_Avg_Stats", "[0]*10").strip("[]").split(",")
-            )
-            team2_stats = (
-                features.get("Team2_Avg_Stats", "[0]*10").strip("[]").split(",")
-            )
-            input_data.extend(map(float, team1_stats))
-            input_data.extend(map(float, team2_stats))
-
-            team1_opp_def = (
-                features.get("Team1_Opp_Defense", "[0]*5").strip("[]").split(",")
-            )
-            team2_opp_def = (
-                features.get("Team2_Opp_Defense", "[0]*5").strip("[]").split(",")
-            )
-            input_data.extend(map(float, team1_opp_def))
-            input_data.extend(map(float, team2_opp_def))
-
-            X.append(input_data)
-            y.append(1 if features["WL"] == "W" else 0)
-
-    print(f"Collected {len(X)} samples for training.")
-    return np.array(X), np.array(y)
+    return X, y
 
 
 def train_model(X, y):
-    """Train a neural network model on the given features and labels."""
+    """
+    Train a neural network model on the given features and labels.
+
+    Args:
+        X: Feature matrix for training.
+        y: Target vector (win/loss).
+
+    Returns:
+        model: Trained neural network model.
+    """
     model = Sequential()
     model.add(Dense(128, activation="relu", input_shape=(X.shape[1],)))
     model.add(Dense(64, activation="relu"))
@@ -135,25 +80,24 @@ def train_model(X, y):
 
 
 if __name__ == "__main__":
-    seasons = ["2020-21", "2021-22", "2022-23", "2023-24"]
-    team_ids_dict = fetch_team_ids()
+    game_logs_file = "data/processed/preprocessed_nba_game_logs.csv"
+    team_features_file = "data/nba_team_features.csv"
 
-    # Generate feature data CSV
-    create_feature_data("data/processed_nba_game_logs.csv", "nba_feature_data.csv")
+    # Prepare the dataset
+    X, y = prepare_dataset(game_logs_file, team_features_file)
 
-    # Prepare training dataset
-    team_pairs = collect_team_pairs(seasons)
-    csv_file = "data/processed_nba_game_logs.csv"
-    X, y = prepare_dataset(team_pairs, team_ids_dict, csv_file)
-
+    # Check if data is valid for training
     if X.size == 0 or y.size == 0:
         print("No data available to train the model.")
     else:
+        # Split the dataset into training and test sets
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42
         )
 
+        # Train the model
         model = train_model(X_train, y_train)
 
+        # Evaluate the model
         test_loss, test_accuracy = model.evaluate(X_test, y_test)
         print(f"Test Loss: {test_loss}, Test Accuracy: {test_accuracy}")
