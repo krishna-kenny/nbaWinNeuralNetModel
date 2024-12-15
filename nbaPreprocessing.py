@@ -172,7 +172,9 @@ def create_team_features(player_features_file, team_features_output):
     team_features.rename(columns={"TEAM_ID": "TEAM_ABBREVIATION"}, inplace=True)
 
     # Merge additional team features
-    additional_features = preprocessed_nba_team_data.drop(columns=["TEAM_ID"])
+    additional_features = preprocessed_nba_team_data.drop(
+        columns=["TEAM_ID", "TEAM_CONFERENCE", "TEAM_SLUG"]
+    )
     team_features = team_features.merge(
         additional_features,
         left_on="TEAM_ABBREVIATION",
