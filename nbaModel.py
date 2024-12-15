@@ -2,11 +2,13 @@ import numpy as np
 import pandas as pd
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.models import load_model
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from imblearn.over_sampling import SMOTE
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
+import joblib  # To save and load the scaler
 
 
 def prepare_dataset(game_logs_file, features_file):
@@ -112,6 +114,7 @@ def train_model(X, y):
 
     Returns:
         model: Trained neural network model.
+        scaler: Fitted scaler for feature normalization.
     """
     # Normalize the data
     scaler = StandardScaler()
@@ -139,9 +142,34 @@ def train_model(X, y):
     return model, scaler
 
 
+def load_trained_model(
+    model_path="saved_model/model.h5", scaler_path="saved_model/scaler.pkl"
+):
+    """
+    Load the pre-trained neural network model and the scaler.
+
+    Args:
+        model_path: Path to the saved model file.
+        scaler_path: Path to the saved scaler file.
+
+    Returns:
+        model: The pre-trained model.
+        scaler: The scaler used for feature normalization.
+    """
+    # Load the trained model
+    model = load_model(model_path)
+
+    # Load the scaler
+    scaler = joblib.load(scaler_path)
+
+    return model, scaler
+
+
 if __name__ == "__main__":
     game_logs_file = "data/processed/preprocessed_nba_game_logs.csv"
     features_file = "data/features.csv"
+    model_save_path = "saved_model/model.h5"
+    scaler_save_path = "saved_model/scaler.pkl"
 
     # Prepare the dataset
     X, y = prepare_dataset(game_logs_file, features_file)
@@ -157,6 +185,14 @@ if __name__ == "__main__":
 
         # Train the neural network
         model, scaler = train_model(X_train, y_train)
+
+        # Save the trained model
+        model.save(model_save_path)
+        print(f"Neural network model saved to {model_save_path}")
+
+        # Save the scaler
+        joblib.dump(scaler, scaler_save_path)
+        print(f"Scaler saved to {scaler_save_path}")
 
         # Evaluate the neural network
         X_test_scaled = scaler.transform(X_test)

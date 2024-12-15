@@ -1,109 +1,120 @@
-import pandas as pd
 import numpy as np
-from nba_api.stats.endpoints import TeamGameLogs
+import pandas as pd
 from nba_api.stats.static import teams
-from nbaModel import load_trained_model  # Ensure this module is correctly referenced
+from nbaModel import (
+    load_trained_model,
+)  # Ensure this is correctly implemented in your nbaModel.py
 
-# Get Team ID based on Team Name
-def get_team_id_by_name(team_name):
-    """Retrieve the team ID by team name."""
+
+# Get Team ID based on abbreviation
+def get_team_id_by_abbreviation(team_abbreviation):
+    """Retrieve the team ID by abbreviation."""
     nba_teams = teams.get_teams()
     for team in nba_teams:
-        if team['full_name'].lower() == team_name.lower():
-            return team['id']
-    raise ValueError(f"Team '{team_name}' not found!")
+        if team["abbreviation"].lower() == team_abbreviation.lower():
+            return team["id"]
+    raise ValueError(
+        f"Team '{team_abbreviation}' not found! Please enter a valid abbreviation."
+    )
 
-# Fetch and process latest game stats (last 16 games) for a team
-def fetch_last_16_games_stats(team_id):
-    """Fetch and compute stats for the last 16 games of a team."""
-    team_game_logs = TeamGameLogs(
-        team_id_nullable=team_id,
-        league_id_nullable='00',
-        season_nullable='2023-24',
-        season_type_nullable='Regular Season'
-    ).get_data_frames()[0].head(16)
 
-    # Calculate win/loss history
-    win_loss_history = team_game_logs['WL'].apply(lambda x: 1 if x == 'W' else 0).tolist()
+# Fetch team-specific features
+def fetch_team_features(team_abbreviation, features_file):
+    """
+    Retrieve the team-specific features for the given team abbreviation.
+    Args:
+        team_abbreviation: Abbreviation of the NBA team (e.g., 'LAL').
+        features_file: CSV file containing the aggregated team features.
+    Returns:
+        numpy array of the team's features.
+    """
+    team_features = pd.read_csv(features_file)
+    team_row = team_features[team_features["TEAM"] == team_abbreviation.upper()]
+    if team_row.empty:
+        raise ValueError(
+            f"Features for team '{team_abbreviation}' not found in {features_file}."
+        )
+    return team_row.drop(columns=["TEAM"]).to_numpy().flatten()
 
-    # Calculate average stats over last 16 games
-    avg_stats = team_game_logs[['PTS', 'FGM', 'FGA', 'FG3M', 'FTM', 'REB', 'AST', 'STL', 'BLK', 'TOV']].mean().to_numpy()
-
-    return win_loss_history, avg_stats
-
-# Calculate head-to-head win/loss history (last 8 games)
-def fetch_head_to_head_history(team1_id, team2_id):
-    """Fetch head-to-head win/loss history between two teams."""
-    team1_logs = TeamGameLogs(
-        team_id_nullable=team1_id,
-        league_id_nullable='00',
-        season_nullable='2023-24',
-        season_type_nullable='Regular Season'
-    ).get_data_frames()[0]
-
-    # Correct MATCHUP string formatting
-    matchup_string = f'{team1_id} vs. {team2_id}'
-    head_to_head_logs = team1_logs[team1_logs['MATCHUP'].str.contains(matchup_string)].head(8)
-
-    return head_to_head_logs['WL'].apply(lambda x: 1 if x == 'W' else 0).tolist()
-
-# Calculate opponent defensive strength (average over past games)
-def calculate_defensive_strength(team_id):
-    """Calculate the defensive strength of a team."""
-    team_game_logs = TeamGameLogs(
-        team_id_nullable=team_id,
-        league_id_nullable='00',
-        season_nullable='2023-24',
-        season_type_nullable='Regular Season'
-    ).get_data_frames()[0].head(16)
-
-    # Opponent defensive stats
-    opponent_defense = team_game_logs[['PTS', 'FG_PCT', 'FG3_PCT', 'REB', 'TOV']].mean().to_numpy()
-    return opponent_defense
 
 # Predict win probability
-def predict_matchup_win_probability(team1_name, team2_name):
-    """Predict the win probability of team1 against team2."""
-    model = load_trained_model()
-    team1_id = get_team_id_by_name(team1_name)
-    team2_id = get_team_id_by_name(team2_name)
+def predict_matchup_win_probability(
+    team1_abbreviation, team2_abbreviation, features_file
+):
+    """
+    Predict the win probability of Team 1 beating Team 2.
+    Args:
+        team1_abbreviation: Abbreviation of Team 1 (e.g., 'LAL').
+        team2_abbreviation: Abbreviation of Team 2 (e.g., 'BOS').
+        features_file: Path to the CSV file containing aggregated team features.
+    """
+    # Load the trained model and scaler
+    model, scaler = load_trained_model()
 
-    # Fetch stats for each team
-    team1_wl_history, team1_avg_stats = fetch_last_16_games_stats(team1_id)
-    team2_wl_history, team2_avg_stats = fetch_last_16_games_stats(team2_id)
-    head_to_head_history = fetch_head_to_head_history(team1_id, team2_id)
-    team1_defense = calculate_defensive_strength(team1_id)
-    team2_defense = calculate_defensive_strength(team2_id)
+    # Fetch features for both teams
+    team1_features = fetch_team_features(team1_abbreviation, features_file)
+    team2_features = fetch_team_features(team2_abbreviation, features_file)
 
-    # Combine features into a single input array
-    features = np.concatenate([
-        [team1_id, team2_id],
-        team1_wl_history,
-        team2_wl_history,
-        head_to_head_history,
-        team1_avg_stats,
-        team2_avg_stats,
-        team1_defense,
-        team2_defense
-    ])
+    # Calculate difference and ratio features
+    diff_features = team1_features - team2_features
+    ratio_features = team1_features / (team2_features + 1e-5)
 
-    # Reshape features for model prediction
-    features = features.reshape(1, -1)
-    
+    # Combine features for the model
+    matchup_features = np.concatenate([diff_features, ratio_features]).reshape(1, -1)
+
+    # Debug: Check input shape
+    print(f"Matchup features shape: {matchup_features.shape}")
+    print(f"Scaler expects: {scaler.n_features_in_}")
+
+    # Ensure consistent feature count
+    if matchup_features.shape[1] != scaler.n_features_in_:
+        raise ValueError(
+            f"Feature count mismatch. Got {matchup_features.shape[1]} features, "
+            f"but scaler expects {scaler.n_features_in_}. Check feature engineering consistency."
+        )
+
+    # Scale the features
+    scaled_features = scaler.transform(matchup_features)
+
     # Predict win probability for Team 1
-    win_probability = model.predict(features)[0][0]
-    print(f"Predicted probability of {team1_name} winning against {team2_name}: {win_probability * 100:.2f}%")
+    win_probability = model.predict(scaled_features)[0][0]
+    print(
+        f"Predicted probability of {team1_abbreviation} beating {team2_abbreviation}: {win_probability * 100:.2f}%"
+    )
+    return win_probability
+
+
+def display_team_data():
+    """Display team names, abbreviations, and IDs in a 2D array."""
+    nba_teams = teams.get_teams()
+    team_data = np.array(
+        [[team["full_name"], team["abbreviation"], team["id"]] for team in nba_teams]
+    )
+    print("\nAvailable Teams:")
+    print(pd.DataFrame(team_data, columns=["Team Name", "Abbreviation", "Team ID"]))
+
 
 def main():
-    team1_name = input("Enter Team 1 name: ")
-    team2_name = input("Enter Team 2 name: ")
-    
+    """Main function to handle user input and prediction."""
+    features_file = "data/features.csv"  # Path to the features file
+
+    # Display team data before taking user input
+    display_team_data()
+
+    team1_abbreviation = input(
+        "Enter Team 1 abbreviation (e.g., 'LAL' for Los Angeles Lakers): "
+    ).strip()
+    team2_abbreviation = input(
+        "Enter Team 2 abbreviation (e.g., 'BOS' for Boston Celtics): "
+    ).strip()
+
     try:
-        predict_matchup_win_probability(team1_name, team2_name)
+        predict_matchup_win_probability(
+            team1_abbreviation, team2_abbreviation, features_file
+        )
     except ValueError as e:
         print(e)
 
+
 if __name__ == "__main__":
     main()
-
-
